@@ -1,21 +1,33 @@
-CREATE TABLE users (
+-- =========================================
+-- СХЕМА БАЗЫ ДАННЫХ ДЛЯ БОТА EnglishCard
+-- =========================================
+
+-- Таблица пользователей Telegram
+CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     tg_id BIGINT UNIQUE NOT NULL,
     first_name TEXT
 );
 
-CREATE TABLE words (
+-- Общий словарь (доступен всем пользователям)
+CREATE TABLE IF NOT EXISTS words (
     id SERIAL PRIMARY KEY,
-    word TEXT NOT NULL,
+    word TEXT NOT NULL UNIQUE,
     translation TEXT NOT NULL
 );
 
-CREATE TABLE user_words (
+-- Персональные слова пользователей
+CREATE TABLE IF NOT EXISTS user_words (
     id SERIAL PRIMARY KEY,
-    user_id INT REFERENCES users(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     word TEXT NOT NULL,
-    translation TEXT NOT NULL
+    translation TEXT NOT NULL,
+    UNIQUE (user_id, word)
 );
+
+-- =========================================
+-- НАЧАЛЬНЫЙ НАБОР СЛОВ (10 ШТУК)
+-- =========================================
 
 INSERT INTO words (word, translation) VALUES
 ('red', 'красный'),
@@ -24,7 +36,8 @@ INSERT INTO words (word, translation) VALUES
 ('yellow', 'жёлтый'),
 ('black', 'чёрный'),
 ('white', 'белый'),
-('I', 'я'),
+('i', 'я'),
 ('you', 'ты'),
 ('he', 'он'),
-('she', 'она');
+('she', 'она')
+ON CONFLICT DO NOTHING;

@@ -1,65 +1,15 @@
 #!/usr/bin/env python3
 """
-Курсовая работа
-ТГ-чат-бот «Обучалка английскому языку» (EnglishCard)
-
-В этом файле:
-1. SQL-скрипты для создания БД
-2. Telegram-бот на Python
-3. Работа с PostgreSQL
+Telegram-бот EnglishCard
+Изучение английских слов с использованием PostgreSQL
 """
-
-# =====================================================
-# 📌 1. SQL СКРИПТЫ ДЛЯ СОЗДАНИЯ БАЗЫ ДАННЫХ
-# =====================================================
-"""
--- Таблица пользователей
-CREATE TABLE users (
-    id SERIAL PRIMARY KEY,
-    tg_id BIGINT UNIQUE,
-    first_name TEXT
-);
-
--- Общие слова (для всех пользователей)
-CREATE TABLE words (
-    id SERIAL PRIMARY KEY,
-    word TEXT NOT NULL,
-    translation TEXT NOT NULL
-);
-
--- Персональные слова пользователя
-CREATE TABLE user_words (
-    id SERIAL PRIMARY KEY,
-    user_id INT REFERENCES users(id),
-    word TEXT NOT NULL,
-    translation TEXT NOT NULL
-);
-
--- Начальный набор слов (10 штук)
-INSERT INTO words (word, translation) VALUES
-('red', 'красный'),
-('blue', 'синий'),
-('green', 'зелёный'),
-('yellow', 'жёлтый'),
-('black', 'чёрный'),
-('white', 'белый'),
-('I', 'я'),
-('you', 'ты'),
-('he', 'он'),
-('she', 'она');
-"""
-# ⬆️ ЭТОТ SQL ВЫПОЛНЯЕТСЯ ОДИН РАЗ В PostgreSQL ⬆️
-
-
-# =====================================================
-# 📌 2. PYTHON-КОД TELEGRAM-БОТА
-# =====================================================
 
 import os
 import random
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -124,30 +74,29 @@ def get_or_create_user(tg_id, name):
 
 
 # =====================================================
-# 🚀 КОМАНДЫ БОТА
+# 🚀 КОМАНДЫ
 # =====================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     get_or_create_user(user.id, user.first_name)
 
-    text = (
+    await update.message.reply_text(
         f"👋 Привет, {user.first_name}!\n\n"
         "📚 Я бот для изучения английских слов.\n\n"
         "Команды:\n"
-        "/train — начать тренировку\n"
+        "/train — тренировка\n"
         "/add — добавить слово\n"
         "/delete — удалить слово\n"
         "/mywords — мои слова\n"
         "/help — помощь"
     )
-    await update.message.reply_text(text)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "ℹ️ Выбирай правильный перевод слова из 4 вариантов.\n"
-        "Добавленные слова видишь только ты."
+        "ℹ️ Выбери правильный перевод слова из 4 вариантов.\n"
+        "Добавленные слова видны только тебе."
     )
 
 
@@ -163,28 +112,27 @@ async def train(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT word, translation FROM words
-        UNION
-        SELECT word, translation FROM user_words WHERE user_id=%s;
+        SELECT word, translation
+        FROM (
+            SELECT word, translation FROM words
+            UNION
+            SELECT word, translation FROM user_words WHERE user_id=%s
+        ) t
+        ORDER BY RANDOM()
+        LIMIT 4;
     """, (user_id,))
 
     words = cur.fetchall()
     cur.close()
     conn.close()
 
-    if len(words) < 4:
-        await update.message.reply_text("❗ Нужно минимум 4 слова.")
-        return
-
     correct = random.choice(words)
-    variants = {correct["translation"]}
-
-    while len(variants) < 4:
-        variants.add(random.choice(words)["translation"])
+    translations = [w["translation"] for w in words]
+    random.shuffle(translations)
 
     buttons = [
-        [InlineKeyboardButton(v, callback_data=f"{correct['word']}|{v}")]
-        for v in random.sample(list(variants), 4)
+        [InlineKeyboardButton(t, callback_data=f"{correct['word']}|{t}")]
+        for t in translations
     ]
 
     await update.message.reply_text(
@@ -207,6 +155,7 @@ async def check_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
         UNION
         SELECT translation FROM user_words WHERE word=%s;
     """, (word, word))
+
     correct = cur.fetchone()["translation"]
     cur.close()
     conn.close()
@@ -220,22 +169,29 @@ async def check_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =====================================================
-# ➕ ДОБАВЛЕНИЕ СЛОВА
+# ➕ ДОБАВЛЕНИЕ СЛОВ
 # =====================================================
 
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Введите слово и перевод через пробел:\n"
-        "apple яблоко"
+        "apple яблоко\n\n"
+        "Для выхода напишите: Назад"
     )
 
 
 async def save_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text.startswith("/"):
+    text = update.message.text.strip()
+
+    if text.lower().startswith("назад"):
+        await update.message.reply_text("📘 Вы в главном меню")
+        return
+
+    if text.startswith("/"):
         return
 
     try:
-        word, translation = update.message.text.split(" ", 1)
+        word, translation = text.split(" ", 1)
     except ValueError:
         await update.message.reply_text("❌ Формат: слово перевод")
         return
@@ -245,6 +201,20 @@ async def save_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = get_db()
     cur = conn.cursor()
+
+    # Проверка на дубли
+    cur.execute("""
+        SELECT 1 FROM words WHERE word=%s
+        UNION
+        SELECT 1 FROM user_words WHERE word=%s AND user_id=%s;
+    """, (word, word, user_id))
+
+    if cur.fetchone():
+        await update.message.reply_text("❌ Такое слово уже существует")
+        cur.close()
+        conn.close()
+        return
+
     cur.execute(
         "INSERT INTO user_words (user_id, word, translation) VALUES (%s,%s,%s);",
         (user_id, word, translation)
@@ -267,7 +237,7 @@ async def save_word(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =====================================================
-# ❌ УДАЛЕНИЕ СЛОВА
+# ❌ УДАЛЕНИЕ
 # =====================================================
 
 async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -276,7 +246,10 @@ async def delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT word FROM user_words WHERE user_id=%s;", (user_id,))
+    cur.execute(
+        "SELECT word FROM user_words WHERE user_id=%s;",
+        (user_id,)
+    )
     words = cur.fetchall()
     cur.close()
     conn.close()
